@@ -38,13 +38,16 @@ module Make() = struct
     (* Oddolna strategia *)
     and _infer_expression env = function (* jak jest sam identyfikator, to chyba typ taki jak w hashtabl?*)
       | EXPR_Id {id; loc; tag} -> 
-          match Hashtbl.find)opt node2type_map tag with
-          | Some tp -> tp
+        failwith "Not yet implemented"
+(*
+          match Hashtbl.find node2type_map tag with
+          | tp -> [tag_of_expression tp]
           | _ -> let descr = "unknown type of identifier" in
             ErrorReporter.report_other_error 
               ~loc:(location_of_expression e)
               ~id:(string_of_identifier id)
               ~descr
+*)
 
       | EXPR_Int _ ->
         TP_Int
@@ -62,17 +65,77 @@ module Make() = struct
         check_function_call env call
 
       | EXPR_Length {arg;loc;_} ->
-        failwith "Not yet implemented"
+        begin match infer_expression env arg with
+        | (TP_Array _) -> TP_Int
+        | _ ->
+          let descr = "operator 'length' expects array" in
+         ErrorReporter.report_other_error ~loc ~descr
+        end
 
-      | EXPR_Relation {lhs; rhs; op=RELOP_Ge; _} 
-      | EXPR_Relation {lhs; rhs; op=RELOP_Gt; _} 
-      | EXPR_Relation {lhs; rhs; op=RELOP_Lt; _} 
-      | EXPR_Relation {lhs; rhs; op=RELOP_Le; _}  ->
-        failwith "Not yet implemented"
+(* ___________________________ <, >, <=, >= _________________________________*)
 
-      | EXPR_Relation {lhs; rhs; op=RELOP_Eq; _} 
+      | EXPR_Relation {lhs; rhs; op=RELOP_Ge; loc; _} ->
+        begin match infer_expression env lhs with
+          | TP_Int as tp -> 
+            check_expression env tp rhs;
+            TP_Bool
+          | _ -> let descr = "operator >= expects integers as arguments" in
+                    ErrorReporter.report_other_error ~loc ~descr
+        end 
+
+      | EXPR_Relation {lhs; rhs; op=RELOP_Gt; loc; _} ->
+        begin match infer_expression env lhs with
+          | TP_Int as tp -> 
+            check_expression env tp rhs;
+            TP_Bool
+          | _ -> let descr = "operator > expects integers as arguments" in
+                    ErrorReporter.report_other_error ~loc ~descr
+        end
+
+
+      | EXPR_Relation {lhs; rhs; op=RELOP_Lt; loc; _} ->
+        begin match infer_expression env lhs with
+          | TP_Int as tp -> 
+            check_expression env tp rhs;
+            TP_Bool
+          | _ -> let descr = "operator < expects integers as arguments" in
+                    ErrorReporter.report_other_error ~loc ~descr
+        end
+
+
+      | EXPR_Relation {lhs; rhs; op=RELOP_Le; loc; _}  ->
+        begin match infer_expression env lhs with
+          | TP_Int as tp -> 
+            check_expression env tp rhs;
+            TP_Bool
+          | _ -> let descr = "operator <= expects integers as arguments" in
+                    ErrorReporter.report_other_error ~loc ~descr
+        end
+(* _______________________________________________________________   *)
+
+      | EXPR_Relation {lhs; rhs; op=RELOP_Eq; loc; _} ->
+        begin match infer_expression env lhs with
+        | (TP_Array _) as tp
+        | (TP_Bool as tp) -> 
+          check_expression env tp rhs;
+          TP_Bool
+        | (TP_Int as tp) ->
+          check_expression env tp rhs;
+          TP_Bool
+        end (* czmu musialam wywalic regule _ -> dla pozostalych przypadkow?? I co z TP_Array? *)
+
+ 
       | EXPR_Relation {lhs; rhs; op=RELOP_Ne; _} ->
-        failwith "Not yet implemented"
+        begin match infer_expression env lhs with
+        | (TP_Array _) as tp
+        | (TP_Bool as tp) -> 
+          check_expression env tp rhs;
+          TP_Bool
+        | (TP_Int as tp) ->
+          check_expression env tp rhs;
+          TP_Bool
+        end
+
 
         (* Reguła dla dodawania, jak w treści zadania *)
       | EXPR_Binop {loc; lhs; rhs; op=BINOP_Add; _} ->
@@ -85,16 +148,65 @@ module Make() = struct
           let descr = "operator + expects integer or array" in
          ErrorReporter.report_other_error ~loc ~descr
         end
+(*________________________________ &, | ________________________________*)
 
-      | EXPR_Binop {lhs; rhs; op=BINOP_And;_} 
-      | EXPR_Binop {lhs; rhs; op=BINOP_Or; _} ->
-        failwith "not yet implemented"
+      | EXPR_Binop {lhs; rhs; op=BINOP_And; loc;_}  ->
+        begin match infer_expression env lhs with
+          | TP_Bool as tp -> 
+            check_expression env tp rhs;
+            TP_Bool
+          | _ -> let descr = "operator & expects booleans as arguments" in
+                    ErrorReporter.report_other_error ~loc ~descr
+        end
+ 
+      | EXPR_Binop {lhs; rhs; op=BINOP_Or; loc;_}  ->
+        begin match infer_expression env lhs with
+          | TP_Bool as tp -> 
+            check_expression env tp rhs;
+            TP_Bool
+          | _ -> let descr = "operator | expects booleans as arguments" in
+                    ErrorReporter.report_other_error ~loc ~descr
+        end
+(*_____________________________ -, *, /, % _______________________________________*)
 
-      | EXPR_Binop {lhs; rhs; op=BINOP_Sub;_} 
-      | EXPR_Binop {lhs; rhs; op=BINOP_Rem;_} 
-      | EXPR_Binop {lhs; rhs; op=BINOP_Mult;_} 
-      | EXPR_Binop {lhs; rhs; op=BINOP_Div; _} ->
-        failwith "not yet implemented"
+      | EXPR_Binop {lhs; rhs; op=BINOP_Sub; loc; _} ->
+        begin match infer_expression env lhs with
+          | TP_Int as tp -> 
+            check_expression env tp rhs;
+            TP_Int
+          | _ -> let descr = "operator - expects integers as arguments" in
+                    ErrorReporter.report_other_error ~loc ~descr
+        end 
+ 
+      | EXPR_Binop {lhs; rhs; op=BINOP_Rem; loc; _} ->
+        begin match infer_expression env lhs with
+          | TP_Int as tp -> 
+            check_expression env tp rhs;
+            TP_Int
+          | _ -> let descr = "operator % expects integers as arguments" in
+                    ErrorReporter.report_other_error ~loc ~descr
+        end  
+
+
+      | EXPR_Binop {lhs; rhs; op=BINOP_Mult; loc; _} ->
+        begin match infer_expression env lhs with
+          | TP_Int as tp -> 
+            check_expression env tp rhs;
+            TP_Int
+          | _ -> let descr = "operator * expects integers as arguments" in
+                    ErrorReporter.report_other_error ~loc ~descr
+        end 
+  
+      | EXPR_Binop {lhs; rhs; op=BINOP_Div; loc; _} ->
+        begin match infer_expression env lhs with
+          | TP_Int as tp -> 
+            check_expression env tp rhs;
+            TP_Int
+          | _ -> let descr = "operator / expects integers as arguments" in
+                    ErrorReporter.report_other_error ~loc ~descr
+        end 
+ 
+(*________________________________________________________________________*)
 
       | EXPR_Unop {op=UNOP_Neg; sub; _} ->
         failwith "not yet implemented"

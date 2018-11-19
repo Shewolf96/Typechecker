@@ -36,18 +36,15 @@ module Make() = struct
 
     (* --------------------------------------------------- *)
     (* Oddolna strategia *)
-    and _infer_expression env = function (* jak jest sam identyfikator, to chyba typ taki jak w hashtabl?*)
+    and _infer_expression env = function
       | EXPR_Id {id; loc; tag} -> 
-        failwith "Not yet implemented"
-(*
-          match Hashtbl.find node2type_map tag with
-          | tp -> [tag_of_expression tp]
-          | _ -> let descr = "unknown type of identifier" in
-            ErrorReporter.report_other_error 
-              ~loc:(location_of_expression e)
-              ~id:(string_of_identifier id)
-              ~descr
-*)
+        begin match TypingEnvironment.lookup id env with
+        | Some (ENVTP_Var tp) -> tp
+        | _ -> ErrorReporter.report_identifier_is_not_variable
+              ~loc:loc
+              ~id:id
+        end
+
 
       | EXPR_Int _ ->
         TP_Int
@@ -58,8 +55,16 @@ module Make() = struct
       | EXPR_Bool _ ->
         TP_Bool
 
+      (*{1, 2, 3}[1 + 0]*)
       | EXPR_Index {expr;index;loc; _} ->
-        failwith "Not yet implemented"
+        begin match infer_expression env expr with
+        | TP_Array tp ->
+           check_expression env TP_Int index;
+           tp
+        | tp -> ErrorReporter.report_expected_array
+                 ~loc:loc
+                 ~actual: tp
+        end
 
       | EXPR_Call call ->
         check_function_call env call
@@ -113,28 +118,15 @@ module Make() = struct
         end
 (* _______________________________________________________________   *)
 
+
       | EXPR_Relation {lhs; rhs; op=RELOP_Eq; loc; _} ->
-        begin match infer_expression env lhs with
-        | (TP_Array _) as tp
-        | (TP_Bool as tp) -> 
-          check_expression env tp rhs;
-          TP_Bool
-        | (TP_Int as tp) ->
-          check_expression env tp rhs;
-          TP_Bool
-        end (* czmu musialam wywalic regule _ -> dla pozostalych przypadkow?? I co z TP_Array? *)
+	    let tp = infer_expression env lhs in check_expression env tp rhs;
+        TP_Bool
 
  
-      | EXPR_Relation {lhs; rhs; op=RELOP_Ne; _} ->
-        begin match infer_expression env lhs with
-        | (TP_Array _) as tp
-        | (TP_Bool as tp) -> 
-          check_expression env tp rhs;
-          TP_Bool
-        | (TP_Int as tp) ->
-          check_expression env tp rhs;
-          TP_Bool
-        end
+      | EXPR_Relation {lhs; rhs; op=RELOP_Ne; loc; _} ->
+        let tp = infer_expression env lhs in check_expression env tp rhs;
+        TP_Bool
 
 
         (* Reguła dla dodawania, jak w treści zadania *)
@@ -316,7 +308,18 @@ module Make() = struct
     let scan_global_declaration env = function
       | GDECL_Function {id; formal_parameters; return_types; loc; _} ->
         (* Dodaj idenetyfkator funkcji i jej typ do środowiska *)
-        failwith "not yet implemented"
+        begin match 
+            TypingEnvironment.add id (
+            (normal_of_var_declarations formal_parameters) 
+            (normal_of_type_expressions return_types)
+            ) env 
+        with
+            | (env, true) -> env
+            | _ -> ErrorReporter.report_shadows_previous_definition
+                    ~loc:loc 
+                    ~id:id
+        end
+
 
     let scan_module env (ModuleDefinition {global_declarations; _}) =
       List.fold_left scan_global_declaration env global_declarations

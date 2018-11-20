@@ -116,7 +116,7 @@ module Make() = struct
           | _ -> let descr = "operator <= expects integers as arguments" in
                     ErrorReporter.report_other_error ~loc ~descr
         end
-(* _______________________________________________________________   *)
+(* ____________________________==, !, + ___________________________________   *)
 
 
       | EXPR_Relation {lhs; rhs; op=RELOP_Eq; loc; _} ->
@@ -198,19 +198,33 @@ module Make() = struct
                     ErrorReporter.report_other_error ~loc ~descr
         end 
  
-(*________________________________________________________________________*)
+(*_________________________-, ! ______________________________________________*)
 
-      | EXPR_Unop {op=UNOP_Neg; sub; _} ->
-        failwith "not yet implemented"
+      | EXPR_Unop {op=UNOP_Neg; sub; loc; _} -> 
+        begin match infer_expression env sub with
+        (*check_expression env TP_Int sub*)
+        | TP_Int as tp -> tp
+        | _ -> let descr = "int expression expected" in
+                    ErrorReporter.report_other_error 
+                        ~loc
+                        ~descr
+        end
 
-      | EXPR_Unop {op=UNOP_Not; sub; _} ->
-        failwith "not yet implemented"
+      | EXPR_Unop {op=UNOP_Not; sub; loc; _} ->
+        begin match infer_expression env sub with
+        | TP_Bool as tp -> tp
+        | _ -> let descr = "bool expression expected" in
+                    ErrorReporter.report_other_error 
+                        ~loc 
+                        ~descr
+        end
+(*_____________________________________________________________________*)
 
-      | EXPR_String _ ->
-        failwith "not yet implemented"
+
+      | EXPR_String _ -> TP_Array TP_Int
 
       | EXPR_Struct {elements=[]; loc; _} ->
-        ErrorReporter.report_cannot_infer ~loc
+        ErrorReporter.report_cannot_infer ~loc (*wtfki??*)
 
       | EXPR_Struct {elements=x::xs; _} ->
         failwith "not yet implemented"
@@ -219,7 +233,7 @@ module Make() = struct
       failwith "not yet implemented"
 
     (* --------------------------------------------------- *)
-    (* Odgórna strategia: zapish w node2type_map oczekiwanie a następnie
+    (* Odgórna strategia: zapish (zapish? xd) w node2type_map oczekiwanie a następnie
      * sprawdź czy nie zachodzi specjalny przypadek. *)
     and check_expression env expected e =
       logf "%s: checking expression against %s"
@@ -297,6 +311,22 @@ module Make() = struct
     and check_statement_block env (STMTBlock {body; _}) =
         failwith "not yet implemented"
 
+
+    (*te moje...*)
+
+    let rec normal_of_type_expr = function
+        | TEXPR_Int _ -> TP_Int
+        | TEXPR_Bool _ -> TP_Bool
+        | TEXPR_Array {sub; _} -> TP_Array (normal_of_type_expr sub)
+    
+    let rec normal_of_var_declarations = function
+        | [] -> []
+        | (VarDecl {tp; _})::t -> (normal_of_type_expr tp)::(normal_of_var_declarations t)
+
+    let rec normal_of_type_expressions = function
+        | [] -> []
+        | h::t -> (normal_of_type_expr h)::(normal_of_type_expressions t)
+
     (* --------------------------------------------------- *)
     (* Top-level funkcje *)
 
@@ -309,10 +339,10 @@ module Make() = struct
       | GDECL_Function {id; formal_parameters; return_types; loc; _} ->
         (* Dodaj idenetyfkator funkcji i jej typ do środowiska *)
         begin match 
-            TypingEnvironment.add id (
-            (normal_of_var_declarations formal_parameters) 
-            (normal_of_type_expressions return_types)
-            ) env 
+            TypingEnvironment.add id (ENVTP_Fn (
+            (normal_of_var_declarations formal_parameters), 
+            (normal_of_type_expressions return_types)))
+            env
         with
             | (env, true) -> env
             | _ -> ErrorReporter.report_shadows_previous_definition
@@ -330,7 +360,7 @@ module Make() = struct
     (* --------------------------------------------------- *)
     (* Przetwórz moduł *)
     let process_module env mdef =
-      (* Wpierw przeskanuj globalne definicje aby uzupełnić środowisko *)
+      (* Najpierw przeskanuj globalne definicje aby uzupełnić środowisko *)
       let env = scan_module env mdef in
       (* Zweryfikuj wszystko *)
       check_module env mdef

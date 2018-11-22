@@ -224,7 +224,7 @@ module Make() = struct
       | EXPR_String _ -> TP_Array TP_Int
 
       | EXPR_Struct {elements=[]; loc; _} ->
-        ErrorReporter.report_cannot_infer ~loc (*wtfki??*)
+        ErrorReporter.report_cannot_infer ~loc
 
       | EXPR_Struct {elements=x::xs; _} ->
         failwith "not yet implemented"
@@ -300,7 +300,19 @@ module Make() = struct
         failwith "not yet implemented"
 
       | STMT_Return {values;loc} ->
-        failwith "not yet implemented"
+        let check_ret_types (expr, tp) = check_expression env tp expr
+        in
+         begin match TypingEnvironment.get_return env with
+          | None -> failwith "internal error 1000"
+          | Some ext_tp -> begin try
+            List.combine values ext_tp |> List.iter check_ret_types;
+            (env, RT_Void) with Invalid_argument _ -> 
+              ErrorReporter.report_bad_number_of_return_values
+              ~loc
+              ~expected: (List.length ext_tp) 
+              ~actual: (List.length values)                                 
+          end
+        end
 
       | STMT_VarDecl {var; init} ->
         failwith "not yet implemented"
@@ -308,8 +320,14 @@ module Make() = struct
       | STMT_While {cond; body; _} ->
         failwith "not yet implemented"
 
-    and check_statement_block env (STMTBlock {body; _}) =
-        failwith "not yet implemented"
+    and check_statement_block env (STMTBlock {body; loc; _}) = 
+      let aux (env, prev_ret_tp) st = begin match prev_ret_tp with
+        | RT_Unit -> check_statement env st
+        | RT_Void -> ErrorReporter.report_other_error
+                      ~loc: (location_of_statement st)
+                      ~descr: "Unreachable statement"
+        end
+      in List.fold_left aux (env, RT_Unit) body 
 
 
     (*te moje...*)
@@ -319,6 +337,9 @@ module Make() = struct
         | TEXPR_Bool _ -> TP_Bool
         | TEXPR_Array {sub; _} -> TP_Array (normal_of_type_expr sub)
     
+    let rec normal_of_var_declaration = function
+        | VarDecl {tp; _} -> normal_of_type_expr tp
+
     let rec normal_of_var_declarations = function
         | [] -> []
         | (VarDecl {tp; _})::t -> (normal_of_type_expr tp)::(normal_of_var_declarations t)
@@ -326,14 +347,30 @@ module Make() = struct
     let rec normal_of_type_expressions = function
         | [] -> []
         | h::t -> (normal_of_type_expr h)::(normal_of_type_expressions t)
+    (*List.map normal_of_type_expr xs *)
 
+    let add_arg_to_env env var_decl = begin match 
+        TypingEnvironment.add (identifier_of_var_declaration var_decl) (ENVTP_Var (normal_of_var_declaration var_decl)) env with 
+          | (env, true) -> env
+          | _ -> ErrorReporter.report_shadows_previous_definition
+                  ~loc: (location_of_var_declaration var_decl)
+                  ~id: (identifier_of_var_declaration var_decl)
+      end
     (* --------------------------------------------------- *)
     (* Top-level funkcje *)
 
     let check_global_declaration env = function
       | GDECL_Function {formal_parameters; return_types; body; loc; id; _} ->
-        (* Sprawdź wszystko *)
-        failwith "not yet implemented"
+        let env' = List.fold_left add_arg_to_env (TypingEnvironment.set_return env (normal_of_type_expressions return_types)) formal_parameters in
+          begin match body with
+            | Some st_block -> 
+              begin match check_statement_block env' st_block with
+                | _, RT_Void -> ()
+                | _ -> ErrorReporter.report_function_must_return_something 
+                        ~loc
+              end
+            | None -> ()
+          end
 
     let scan_global_declaration env = function
       | GDECL_Function {id; formal_parameters; return_types; loc; _} ->

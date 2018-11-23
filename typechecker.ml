@@ -314,6 +314,23 @@ module Make() = struct
         infer_expression env sub
 
 
+    let check_var_declaration env tp var =   
+        let tp' = normal_of_type_expr (type_expression_of_var_declaration var) in
+          if tp' = tp then 
+              begin match TypingEnvironment.add 
+                  (identifier_of_var_declaration var) 
+                  (ENVTP_Var tp') env
+              with
+                | (env', true) -> env'
+                | _ -> ErrorReporter.report_shadows_previous_definition
+                      ~loc: (location_of_var_declaration var)
+                      ~id: (identifier_of_var_declaration var)
+              end
+          else ErrorReporter.report_type_mismatch 
+               ~loc: (location_of_var_declaration var)
+               ~expected: tp 
+               ~actual: tp'
+    
     (* --------------------------------------------------- *)
     (* Sprawdzanie statementów *)
 
@@ -324,8 +341,21 @@ module Make() = struct
         check_expression env lhs_tp rhs;
         env, RT_Unit
 
-      | STMT_MultiVarDecl {vars; init; _} ->
-        failwith "not yet implemented"
+      | STMT_MultiVarDecl {vars; init; loc; _} ->
+        let check_var_decl_opt env = function
+          | None, _ -> env
+          | Some var_decl, tp -> check_var_declaration env tp var_decl
+        and ret_tp_list = check_function_call env init in
+        let new_env = begin try 
+          List.combine vars ret_tp_list |> List.fold_left check_var_decl_opt env
+          with Invalid_argument _ -> 
+            ErrorReporter.report_bad_number_of_return_values
+                  ~loc
+                  ~expected: (List.length vars) 
+                  ~actual: (List.length ret_tp_list) 
+          end in (new_env, RT_Unit)
+          
+        
 
       | STMT_Block body ->
         check_statement_block env body
@@ -381,18 +411,17 @@ module Make() = struct
         let _ = check_statement env body in (env, RT_Unit)
 
     and check_statement_block env (STMTBlock {body; loc; _}) = 
-      let aux (env, prev_ret_tp) st = begin match prev_ret_tp with
-        | RT_Unit -> check_statement env st
-        | RT_Void -> ErrorReporter.report_other_error
-                      ~loc: (location_of_statement st)
-                      ~descr: "Unreachable statement"
-        end
-      in List.fold_left aux (env, RT_Unit) body 
-
-
-    (*te moje...*)
-
-
+      begin match body with 
+      | [] -> (env, RT_Unit)
+      | _ ->
+        let aux (env, prev_ret_tp) st = begin match prev_ret_tp with
+          | RT_Unit -> check_statement env st
+          | RT_Void -> ErrorReporter.report_other_error
+                        ~loc: (location_of_statement st)
+                        ~descr: "Unreachable statement"
+          end
+        in List.fold_left aux (env, RT_Unit) body 
+      end
 
     
     let rec normal_of_var_declaration = function

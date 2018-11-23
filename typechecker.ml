@@ -21,6 +21,11 @@ module Make() = struct
      * Jeżeli typowanie się powiedzie to zawartość tablicy wydrukuje się
      * do pliku xilog/004.typechecking.types
      *)
+    let rec normal_of_type_expr = function
+        | TEXPR_Int _ -> TP_Int
+        | TEXPR_Bool _ -> TP_Bool
+        | TEXPR_Array {sub; _} -> TP_Array (normal_of_type_expr sub) 
+     
     let node2type_map = Hashtbl.create 513
 
     (* --------------------------------------------------- *)
@@ -67,7 +72,12 @@ module Make() = struct
         end
 
       | EXPR_Call call ->
-        check_function_call env call
+        begin match check_function_call env call with
+        | ret_tp::[] -> ret_tp
+        | _ -> ErrorReporter.report_expected_function_returning_one_value 
+                ~loc: (location_of_call call)
+                ~id: (identifier_of_call call)
+        end
 
       | EXPR_Length {arg;loc;_} ->
         begin match infer_expression env arg with
@@ -227,10 +237,27 @@ module Make() = struct
         ErrorReporter.report_cannot_infer ~loc
 
       | EXPR_Struct {elements=x::xs; _} ->
-        failwith "not yet implemented"
+        let tp = infer_expression env x in List.iter (check_expression env tp) xs;
+        TP_Array tp
 
-    and check_function_call env call = 
-      failwith "not yet implemented"
+    and check_function_call env (Call {loc; callee; arguments; _}) = 
+      let check_ret_types (expr, tp) = check_expression env tp expr in
+        begin match TypingEnvironment.lookup callee env with
+          | Some ENVTP_Fn (arg_tp, ret_tp) -> begin try
+              List.combine arguments arg_tp |> List.iter check_ret_types;
+              ret_tp
+              with Invalid_argument _ -> 
+                  ErrorReporter.report_bad_number_of_arguments 
+                  ~loc 
+                  ~expected: (List.length arg_tp) 
+                  ~actual: (List.length arguments)
+              end
+          | _ -> ErrorReporter.report_identifier_is_not_callable 
+                  ~loc 
+                  ~id: callee
+        end
+
+              
 
     (* --------------------------------------------------- *)
     (* Odgórna strategia: zapish (zapish? xd) w node2type_map oczekiwanie a następnie
@@ -263,17 +290,28 @@ module Make() = struct
     (* Pomocnicza funkcja do sprawdzania wywołania procedury *)
 
     let check_procedure_call env call : unit = 
-      failwith "not yet implemented"
+      match check_function_call env call with
+      | [] -> ()
+      | _ -> ErrorReporter.report_procedure_cannot_return_value
+             ~loc: (location_of_call call)
+      
+      
 
     (* --------------------------------------------------- *)
     (* Rekonstrukcja typu dla lvalue *)
 
     let infer_lvalue env = function
       | LVALUE_Id {id;loc;_} -> 
-        failwith "not yet implemented"
-
+        begin match TypingEnvironment.lookup_unsafe id env with
+        | ENVTP_Var tp -> tp
+        | _ -> ErrorReporter.report_identifier_is_not_variable
+               ~loc 
+               ~id
+        end
+        
       | LVALUE_Index {index; sub; loc} ->
-        failwith "not yet implemented"
+        check_expression env TP_Int index;
+        infer_expression env sub
 
 
     (* --------------------------------------------------- *)
@@ -296,29 +334,51 @@ module Make() = struct
         check_procedure_call env call;
         env, RT_Unit
 
-      | STMT_If {cond;then_branch;else_branch; _} ->
-        failwith "not yet implemented"
-
-      | STMT_Return {values;loc} ->
-        let check_ret_types (expr, tp) = check_expression env tp expr
-        in
-         begin match TypingEnvironment.get_return env with
-          | None -> failwith "internal error 1000"
-          | Some ext_tp -> begin try
-            List.combine values ext_tp |> List.iter check_ret_types;
-            (env, RT_Void) with Invalid_argument _ -> 
-              ErrorReporter.report_bad_number_of_return_values
-              ~loc
-              ~expected: (List.length ext_tp) 
-              ~actual: (List.length values)                                 
-          end
+      | STMT_If {cond; then_branch; else_branch; _} ->
+        check_expression env TP_Bool cond;
+        begin match else_branch with
+        | Some else_st -> 
+          let (_, tp) = check_statement env then_branch in 
+             begin match tp with 
+             | RT_Unit-> (env, tp)
+             | RT_Void -> let (_, tp') = check_statement env else_st in (env, tp')
+             end
+        | None -> let _ = check_statement env then_branch in 
+                  (env, RT_Unit)
         end
 
+      | STMT_Return {values;loc} ->
+        let check_ret_types (expr, tp) = check_expression env tp expr in
+           begin match TypingEnvironment.get_return env with
+            | None -> failwith "TypingEnvironment.get_return internal error"
+            | Some ext_tp -> begin try
+              List.combine values ext_tp |> List.iter check_ret_types;
+              (env, RT_Void) with Invalid_argument _ -> 
+                ErrorReporter.report_bad_number_of_return_values
+                ~loc
+                ~expected: (List.length ext_tp) 
+                ~actual: (List.length values)                                 
+             end
+           end
+
       | STMT_VarDecl {var; init} ->
-        failwith "not yet implemented"
+        let tp = normal_of_type_expr (type_expression_of_var_declaration var) in
+          begin match TypingEnvironment.add (identifier_of_var_declaration var) (ENVTP_Var tp) env
+          with
+            | (env', true) -> begin match init with
+                | Some expr -> 
+                    check_expression env' tp expr;
+                    (env', RT_Unit)
+                | None -> (env', RT_Unit)
+                end
+            | _ -> ErrorReporter.report_shadows_previous_definition
+                  ~loc: (location_of_var_declaration var)
+                  ~id: (identifier_of_var_declaration var)
+          end
 
       | STMT_While {cond; body; _} ->
-        failwith "not yet implemented"
+        check_expression env TP_Bool cond;
+        let _ = check_statement env body in (env, RT_Unit)
 
     and check_statement_block env (STMTBlock {body; loc; _}) = 
       let aux (env, prev_ret_tp) st = begin match prev_ret_tp with
@@ -332,10 +392,8 @@ module Make() = struct
 
     (*te moje...*)
 
-    let rec normal_of_type_expr = function
-        | TEXPR_Int _ -> TP_Int
-        | TEXPR_Bool _ -> TP_Bool
-        | TEXPR_Array {sub; _} -> TP_Array (normal_of_type_expr sub)
+
+
     
     let rec normal_of_var_declaration = function
         | VarDecl {tp; _} -> normal_of_type_expr tp
@@ -350,12 +408,15 @@ module Make() = struct
     (*List.map normal_of_type_expr xs *)
 
     let add_arg_to_env env var_decl = begin match 
-        TypingEnvironment.add (identifier_of_var_declaration var_decl) (ENVTP_Var (normal_of_var_declaration var_decl)) env with 
+        TypingEnvironment.add (identifier_of_var_declaration var_decl) 
+          (ENVTP_Var (normal_of_var_declaration var_decl)) env 
+          with 
           | (env, true) -> env
           | _ -> ErrorReporter.report_shadows_previous_definition
                   ~loc: (location_of_var_declaration var_decl)
                   ~id: (identifier_of_var_declaration var_decl)
       end
+      
     (* --------------------------------------------------- *)
     (* Top-level funkcje *)
 
